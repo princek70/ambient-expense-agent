@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ambient Expense Agent — Dashboard</title>
+  <meta name="description" content="AI-powered expense approval system with automated risk analysis and human-in-the-loop review.">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="logo">
+        <i data-lucide="sparkles"></i>
+        Expense Agent
+      </div>
+      <nav>
+        <a class="nav-item active" data-view="dashboard" id="nav-dashboard">
+          <i data-lucide="layout-dashboard" style="width:18px;height:18px"></i>
+          Dashboard
+        </a>
+        <a class="nav-item" data-view="submit" id="nav-submit">
+          <i data-lucide="plus-circle" style="width:18px;height:18px"></i>
+          Submit Expense
+        </a>
+        <a class="nav-item" data-view="review" id="nav-review">
+          <i data-lucide="clock" style="width:18px;height:18px"></i>
+          Review Queue
+          <span id="review-badge" style="margin-left:auto;background:var(--warning);color:#000;padding:2px 8px;border-radius:10px;font-size:0.7rem;font-weight:700;display:none">0</span>
+        </a>
+        <a class="nav-item" data-view="history" id="nav-history">
+          <i data-lucide="history" style="width:18px;height:18px"></i>
+          History
+        </a>
+      </nav>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- Dashboard View -->
+      <div class="view active" id="view-dashboard">
+        <h1 style="margin-bottom:8px">Dashboard</h1>
+        <p style="color:var(--text-secondary);margin-bottom:32px">Overview of your expense activity</p>
+        <div class="stats-grid">
+          <div class="glass-card stat-card">
+            <div class="stat-header"><i data-lucide="receipt" style="width:18px;height:18px"></i> Total Expenses</div>
+            <div class="stat-value" id="stat-total">0</div>
+          </div>
+          <div class="glass-card stat-card">
+            <div class="stat-header"><i data-lucide="check-circle" style="width:18px;height:18px;color:var(--success)"></i> Approved</div>
+            <div class="stat-value" id="stat-approved" style="color:var(--success)">0</div>
+          </div>
+          <div class="glass-card stat-card">
+            <div class="stat-header"><i data-lucide="clock" style="width:18px;height:18px;color:var(--warning)"></i> Pending Review</div>
+            <div class="stat-value" id="stat-pending" style="color:var(--warning)">0</div>
+          </div>
+          <div class="glass-card stat-card">
+            <div class="stat-header"><i data-lucide="x-circle" style="width:18px;height:18px;color:var(--danger)"></i> Rejected</div>
+            <div class="stat-value" id="stat-rejected" style="color:var(--danger)">0</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="switchView('submit')">
+          <i data-lucide="plus" style="width:18px;height:18px"></i>
+          Submit New Expense
+        </button>
+      </div>
+
+      <!-- Submit Expense View -->
+      <div class="view" id="view-submit">
+        <h1 style="margin-bottom:8px">Submit Expense</h1>
+        <p style="color:var(--text-secondary);margin-bottom:32px">Fill in the details below and the AI agent will process your claim</p>
+        <div class="glass-card" style="max-width:600px">
+          <form id="expense-form">
+            <div class="form-group">
+              <label for="amount">Amount (USD)</label>
+              <input type="number" id="amount" class="form-input" placeholder="e.g. 250.00" step="0.01" min="0.01" required>
+            </div>
+            <div class="form-group">
+              <label for="submitter">Submitter Email</label>
+              <input type="email" id="submitter" class="form-input" placeholder="e.g. alice@company.com" required>
+            </div>
+            <div class="form-group">
+              <label for="category">Category</label>
+              <select id="category" class="form-select" required>
+                <option value="">Select a category</option>
+                <option value="meals">Meals</option>
+                <option value="travel">Travel</option>
+                <option value="software">Software</option>
+                <option value="office">Office Supplies</option>
+                <option value="luxury">Luxury</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="description">Description</label>
+              <textarea id="description" class="form-input" rows="3" placeholder="Describe the expense..." required></textarea>
+            </div>
+            <div class="form-group">
+              <label for="date">Date</label>
+              <input type="date" id="date" class="form-input" required>
+            </div>
+            <button type="submit" class="btn btn-primary" id="submit-btn" style="width:100%">
+              <i data-lucide="send" style="width:18px;height:18px"></i>
+              Submit for Processing
+            </button>
+          </form>
+        </div>
+
+        <!-- Workflow Visualizer -->
+        <div id="workflow-container" style="display:none;margin-top:32px">
+          <h2 style="margin-bottom:16px">Processing Pipeline</h2>
+          <div class="glass-card">
+            <div class="workflow-pipeline">
+              <div class="workflow-step" id="step-parse">
+                <div class="step-circle"><i data-lucide="file-text" style="width:14px;height:14px"></i></div>
+                <span class="step-label">Parse</span>
+              </div>
+              <div class="workflow-step" id="step-pii">
+                <div class="step-circle"><i data-lucide="shield" style="width:14px;height:14px"></i></div>
+                <span class="step-label">PII Scrub</span>
+              </div>
+              <div class="workflow-step" id="step-security">
+                <div class="step-circle"><i data-lucide="scan" style="width:14px;height:14px"></i></div>
+                <span class="step-label">Security</span>
+              </div>
+              <div class="workflow-step" id="step-risk">
+                <div class="step-circle"><i data-lucide="bar-chart-3" style="width:14px;height:14px"></i></div>
+                <span class="step-label">Risk Eval</span>
+              </div>
+              <div class="workflow-step" id="step-approval">
+                <div class="step-circle"><i data-lucide="user-check" style="width:14px;height:14px"></i></div>
+                <span class="step-label">Approval</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Review Queue View -->
+      <div class="view" id="view-review">
+        <h1 style="margin-bottom:8px">Review Queue</h1>
+        <p style="color:var(--text-secondary);margin-bottom:32px">Expenses awaiting your approval</p>
+        <div class="review-grid" id="review-grid">
+          <div class="empty-state" id="review-empty">
+            <i data-lucide="inbox" style="width:48px;height:48px;display:block;margin:0 auto 16px"></i>
+            <p>No expenses pending review</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- History View -->
+      <div class="view" id="view-history">
+        <h1 style="margin-bottom:8px">Expense History</h1>
+        <p style="color:var(--text-secondary);margin-bottom:32px">Record of all processed expenses</p>
+        <div class="glass-card" style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Submitter</th>
+                <th>Amount</th>
+                <th>Category</th>
+                <th>Status</th>
+                <th>Reviewer</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr id="history-empty">
+                <td colspan="6" class="empty-state">
+                  <i data-lucide="archive" style="width:48px;height:48px;display:block;margin:0 auto 16px"></i>
+                  <p>No expense history yet</p>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Chat Panel -->
+  <button class="chat-toggle" id="chat-toggle-btn" title="Agent Activity">
+    <i data-lucide="message-circle" style="width:24px;height:24px"></i>
+  </button>
+  <aside class="chat-panel" id="chat-panel">
+    <div class="chat-header">
+      <strong>Agent Activity</strong>
+      <button id="chat-close-btn"><i data-lucide="x" style="width:18px;height:18px"></i></button>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-bubble agent">Welcome! Submit an expense to see the AI agent in action.</div>
+    </div>
+    <div class="chat-input-area">
+      <input type="text" class="form-input" id="chat-input" placeholder="Type approve or reject...">
+      <button class="btn btn-primary" id="chat-send-btn" style="padding:12px 16px">
+        <i data-lucide="send" style="width:18px;height:18px"></i>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

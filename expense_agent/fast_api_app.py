@@ -14,8 +14,11 @@
 import json
 import logging as std_logging
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from google.adk.cli.fast_api import get_fast_api_app
 
 from expense_agent.app_utils.telemetry import setup_telemetry
@@ -28,7 +31,7 @@ std_logging.basicConfig(level=std_logging.INFO)
 logger = std_logging.getLogger(__name__)
 
 allow_origins = (
-    os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
+    os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else ["*"]
 )
 
 # Artifact bucket for ADK (created by Terraform, passed via env var)
@@ -51,6 +54,18 @@ app: FastAPI = get_fast_api_app(
 )
 app.title = "ambient-expense-agent"
 app.description = "API for interacting with the Agent ambient-expense-agent"
+
+# --- Frontend: Serve static files and root route ---
+STATIC_DIR = Path(__file__).parent / "static"
+
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/")
+    async def serve_frontend():
+        """Serve the frontend dashboard."""
+        return FileResponse(str(STATIC_DIR / "index.html"))
+
 
 
 @app.middleware("http")
