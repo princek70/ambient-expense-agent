@@ -83,7 +83,9 @@ function updateStats() {
 
 // ========== Workflow Visualizer ==========
 const WORKFLOW_STEPS = ['parse', 'pii', 'security', 'risk', 'approval'];
-const AUTHOR_TO_STEP = {
+
+// Map nodeInfo.path fragments to workflow steps
+const NODE_TO_STEP = {
   'parse_expense': 'parse',
   'route_expense': 'parse',
   'scrub_pii': 'pii',
@@ -93,8 +95,23 @@ const AUTHOR_TO_STEP = {
   'human_approval': 'approval',
   'auto_approve': 'approval',
   'record_outcome': 'approval',
-  'expense_approval_workflow': null,
 };
+
+function getNodeName(event) {
+  // Extract node name from nodeInfo.path, e.g.
+  // "expense_approval_workflow@1/auto_approve@1" → "auto_approve"
+  if (event.nodeInfo && event.nodeInfo.path) {
+    const parts = event.nodeInfo.path.split('/');
+    const last = parts[parts.length - 1]; // "auto_approve@1"
+    return last.split('@')[0]; // "auto_approve"
+  }
+  return event.author || '';
+}
+
+function getStepForEvent(event) {
+  const nodeName = getNodeName(event);
+  return NODE_TO_STEP[nodeName] || null;
+}
 
 function resetWorkflow() {
   WORKFLOW_STEPS.forEach(s => {
@@ -106,6 +123,7 @@ function resetWorkflow() {
 function setWorkflowStep(stepName) {
   if (!stepName) return;
   const idx = WORKFLOW_STEPS.indexOf(stepName);
+  if (idx === -1) return;
   WORKFLOW_STEPS.forEach((s, i) => {
     const el = document.getElementById('step-' + s);
     el.classList.remove('active', 'completed');
@@ -192,6 +210,7 @@ async function sendToAgent(messageText, sessionId) {
   const decoder = new TextDecoder();
   let buffer = '';
   let needsHumanApproval = false;
+  let flowCompleted = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -208,27 +227,70 @@ async function sendToAgent(messageText, sessionId) {
 
       try {
         const event = JSON.parse(jsonStr);
-        handleSSEEvent(event);
+        const nodeName = getNodeName(event);
+        const stepName = getStepForEvent(event);
 
-        // Detect human approval request
+        // Update workflow visualizer
+        if (stepName) {
+          setWorkflowStep(stepName);
+        }
+
+        // Show text content in chat (skip partial streaming and empty text)
+        if (!event.partial) {
+          const text = extractText(event);
+          if (text && text.trim()) {
+            const label = nodeName ? `[${nodeName}] ` : '';
+            addChatBubble(label + text, 'agent');
+          }
+        }
+
+        // Detect human approval via adk_request_input functionCall
         if (event.content && event.content.parts) {
           for (const part of event.content.parts) {
+            if (part.functionCall && part.functionCall.name === 'adk_request_input') {
+              needsHumanApproval = true;
+            }
+            // Also detect via text content as fallback
             if (part.text && part.text.includes('approve or reject')) {
               needsHumanApproval = true;
             }
           }
         }
 
-        // Detect auto-approval (final decision)
-        const author = event.author || '';
-        if (author === 'auto_approve' || author === 'record_outcome') {
-          const text = extractText(event);
-          if (text) {
-            const status = text.toLowerCase().includes('approved') ? 'approved' : 'rejected';
+        // Detect auto-approval or final outcome via output.status
+        if (event.output && event.output.status) {
+          const status = event.output.status.toLowerCase();
+          if (status === 'approved' || status === 'rejected') {
             completeAllSteps();
-            addToHistory(currentExpense, status, author === 'auto_approve' ? 'system' : 'human');
-            showToast(`Expense ${status}!`, status === 'approved' ? 'info' : 'error');
+            const reviewer = (nodeName === 'auto_approve') ? 'system' : 'human';
+            addToHistory(currentExpense, status, reviewer);
+            showToast(
+              `Expense ${status}!`,
+              status === 'approved' ? 'success' : 'error'
+            );
             resetForm();
+            flowCompleted = true;
+          }
+        }
+
+        // Also detect completion from nodeInfo.outputFor containing the root workflow
+        if (event.nodeInfo && event.nodeInfo.outputFor) {
+          for (const outFor of event.nodeInfo.outputFor) {
+            if (outFor.startsWith('expense_approval_workflow@') && nodeName !== 'expense_approval_workflow') {
+              // This is the final output node - check for status in output
+              if (event.output && event.output.status && !flowCompleted) {
+                const status = event.output.status.toLowerCase();
+                completeAllSteps();
+                const reviewer = (nodeName === 'auto_approve') ? 'system' : 'human';
+                addToHistory(currentExpense, status, reviewer);
+                showToast(
+                  `Expense ${status}!`,
+                  status === 'approved' ? 'success' : 'error'
+                );
+                resetForm();
+                flowCompleted = true;
+              }
+            }
           }
         }
       } catch (parseErr) {
@@ -237,7 +299,8 @@ async function sendToAgent(messageText, sessionId) {
     }
   }
 
-  if (needsHumanApproval && currentExpense) {
+  // After stream ends: if human approval was detected and flow didn't complete
+  if (needsHumanApproval && currentExpense && !flowCompleted) {
     pendingReviews[sessionId] = {
       ...currentExpense,
       sessionId: sessionId,
@@ -250,25 +313,11 @@ async function sendToAgent(messageText, sessionId) {
   }
 }
 
-// ========== Handle SSE Events ==========
-function handleSSEEvent(event) {
-  const author = event.author || '';
-  const stepName = AUTHOR_TO_STEP[author];
-  if (stepName) {
-    setWorkflowStep(stepName);
-  }
-
-  const text = extractText(event);
-  if (text && text.trim()) {
-    const label = author ? `[${author}] ` : '';
-    addChatBubble(label + text, 'agent');
-  }
-}
-
+// ========== Extract Text ==========
 function extractText(event) {
   if (event.content && event.content.parts) {
     return event.content.parts
-      .filter(p => p.text)
+      .filter(p => p.text && !p.thoughtSignature)
       .map(p => p.text)
       .join('\n');
   }
@@ -278,7 +327,6 @@ function extractText(event) {
 // ========== Review Queue ==========
 function renderReviewQueue() {
   const grid = document.getElementById('review-grid');
-  const empty = document.getElementById('review-empty');
   const keys = Object.keys(pendingReviews);
 
   if (keys.length === 0) {
@@ -334,6 +382,11 @@ async function handleReviewAction(sessionId, action) {
 
   showToast(`Sending ${action} decision...`, 'info');
 
+  // Show workflow again for the approval step
+  const wfContainer = document.getElementById('workflow-container');
+  wfContainer.style.display = 'block';
+  setWorkflowStep('approval');
+
   // Send the decision to the agent
   await sendToAgent(action, sessionId);
 }
@@ -387,6 +440,8 @@ function resetForm() {
   btn.disabled = false;
   btn.innerHTML = '<i data-lucide="send" style="width:18px;height:18px"></i> Submit for Processing';
   lucide.createIcons();
+  // Set default date to today
+  document.getElementById('date').valueAsDate = new Date();
 }
 
 function createEmptyState(icon, text) {
