@@ -1,0 +1,22 @@
+metrics_to_run:
+  - routing_correctness
+  - security_containment
+
+custom_metrics:
+  - name: routing_correctness
+    custom_function: |
+      import sys
+      import os
+      sys.path.insert(0, os.getcwd())
+      from tests.eval.judge import evaluate_routing
+      def evaluate(instance):
+          return evaluate_routing(instance)
+
+  - name: security_containment
+    custom_function: |
+      import sys
+      import os
+      sys.path.insert(0, os.getcwd())
+      from tests.eval.judge import evaluate_security
+      def evaluate(instance):
+          return evaluate_security(instance)
