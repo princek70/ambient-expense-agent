@@ -16,7 +16,7 @@ function switchView(viewName) {
   document.querySelector(`[data-view="${viewName}"]`).classList.add('active');
   if (viewName === 'review') renderReviewQueue();
   if (viewName === 'history') renderHistory();
-  if (viewName === 'dashboard') updateStats();
+  updateStats();
 }
 
 // ========== Chat Panel ==========
@@ -60,12 +60,12 @@ function showToast(message, type = 'info') {
   setTimeout(() => toast.remove(), 4000);
 }
 
-// ========== Stats ==========
+// ========== Stats — always update all counters ==========
 function updateStats() {
-  const total = expenseHistory.length + Object.keys(pendingReviews).length;
   const approved = expenseHistory.filter(e => e.status === 'approved').length;
   const rejected = expenseHistory.filter(e => e.status === 'rejected').length;
   const pending = Object.keys(pendingReviews).length;
+  const total = expenseHistory.length + pending;
 
   document.getElementById('stat-total').textContent = total;
   document.getElementById('stat-approved').textContent = approved;
@@ -84,7 +84,7 @@ function updateStats() {
 // ========== Workflow Visualizer ==========
 const WORKFLOW_STEPS = ['parse', 'pii', 'security', 'risk', 'approval'];
 
-// Map nodeInfo.path fragments to workflow steps
+// Map node names (from nodeInfo.path) to workflow steps
 const NODE_TO_STEP = {
   'parse_expense': 'parse',
   'route_expense': 'parse',
@@ -98,25 +98,22 @@ const NODE_TO_STEP = {
 };
 
 function getNodeName(event) {
-  // Extract node name from nodeInfo.path, e.g.
-  // "expense_approval_workflow@1/auto_approve@1" → "auto_approve"
+  // Extract the last node name from nodeInfo.path
+  // e.g. "expense_approval_workflow@1/auto_approve@1" → "auto_approve"
   if (event.nodeInfo && event.nodeInfo.path) {
-    const parts = event.nodeInfo.path.split('/');
-    const last = parts[parts.length - 1]; // "auto_approve@1"
-    return last.split('@')[0]; // "auto_approve"
+    const segments = event.nodeInfo.path.split('/');
+    const lastSeg = segments[segments.length - 1]; // "auto_approve@1"
+    return lastSeg.split('@')[0]; // "auto_approve"
   }
-  return event.author || '';
-}
-
-function getStepForEvent(event) {
-  const nodeName = getNodeName(event);
-  return NODE_TO_STEP[nodeName] || null;
+  return '';
 }
 
 function resetWorkflow() {
   WORKFLOW_STEPS.forEach(s => {
     const el = document.getElementById('step-' + s);
-    el.classList.remove('active', 'completed');
+    if (el) {
+      el.classList.remove('active', 'completed');
+    }
   });
 }
 
@@ -126,6 +123,7 @@ function setWorkflowStep(stepName) {
   if (idx === -1) return;
   WORKFLOW_STEPS.forEach((s, i) => {
     const el = document.getElementById('step-' + s);
+    if (!el) return;
     el.classList.remove('active', 'completed');
     if (i < idx) el.classList.add('completed');
     if (i === idx) el.classList.add('active');
@@ -135,6 +133,7 @@ function setWorkflowStep(stepName) {
 function completeAllSteps() {
   WORKFLOW_STEPS.forEach(s => {
     const el = document.getElementById('step-' + s);
+    if (!el) return;
     el.classList.remove('active');
     el.classList.add('completed');
   });
@@ -151,7 +150,7 @@ document.getElementById('expense-form').addEventListener('submit', async (e) => 
     date: document.getElementById('date').value,
   };
 
-  currentExpense = expense;
+  currentExpense = { ...expense };
 
   // Disable submit button
   const btn = document.getElementById('submit-btn');
@@ -165,7 +164,7 @@ document.getElementById('expense-form').addEventListener('submit', async (e) => 
 
   // Open chat panel
   document.getElementById('chat-panel').classList.add('open');
-  addChatBubble(`Submitting expense: $${expense.amount} for ${expense.category}`, 'user');
+  addChatBubble(`Submitting: $${expense.amount} — ${expense.category} — ${expense.description}`, 'user');
 
   try {
     // Create a session
@@ -181,9 +180,7 @@ document.getElementById('expense-form').addEventListener('submit', async (e) => 
     await sendToAgent(JSON.stringify(expense), currentSessionId);
   } catch (err) {
     showToast('Error: ' + err.message, 'error');
-    btn.disabled = false;
-    btn.innerHTML = '<i data-lucide="send" style="width:18px;height:18px"></i> Submit for Processing';
-    lucide.createIcons();
+    resetForm();
   }
 });
 
@@ -200,11 +197,18 @@ async function sendToAgent(messageText, sessionId) {
     streaming: true,
   };
 
-  const response = await fetch('/run_sse', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let response;
+  try {
+    response = await fetch('/run_sse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    showToast('Network error: ' + err.message, 'error');
+    resetForm();
+    return;
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -218,110 +222,98 @@ async function sendToAgent(messageText, sessionId) {
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
-    buffer = lines.pop();
+    buffer = lines.pop(); // keep the incomplete last line
 
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue;
       const jsonStr = line.slice(6).trim();
       if (!jsonStr || jsonStr === '[DONE]') continue;
 
+      let event;
       try {
-        const event = JSON.parse(jsonStr);
-        const nodeName = getNodeName(event);
-        const stepName = getStepForEvent(event);
+        event = JSON.parse(jsonStr);
+      } catch (e) {
+        continue; // skip unparseable
+      }
 
-        // Update workflow visualizer
-        if (stepName) {
-          setWorkflowStep(stepName);
-        }
+      // Skip partial streaming chunks (only show final aggregated events)
+      if (event.partial === true) continue;
 
-        // Show text content in chat (skip partial streaming and empty text)
-        if (!event.partial) {
-          const text = extractText(event);
-          if (text && text.trim()) {
-            const label = nodeName ? `[${nodeName}] ` : '';
-            addChatBubble(label + text, 'agent');
-          }
-        }
+      const nodeName = getNodeName(event);
+      const stepName = NODE_TO_STEP[nodeName] || null;
 
-        // Detect human approval via adk_request_input functionCall
-        if (event.content && event.content.parts) {
-          for (const part of event.content.parts) {
-            if (part.functionCall && part.functionCall.name === 'adk_request_input') {
-              needsHumanApproval = true;
-            }
-            // Also detect via text content as fallback
-            if (part.text && part.text.includes('approve or reject')) {
-              needsHumanApproval = true;
-            }
-          }
-        }
+      // 1. Update workflow visualizer
+      if (stepName) {
+        setWorkflowStep(stepName);
+      }
 
-        // Detect auto-approval or final outcome via output.status
-        if (event.output && event.output.status) {
-          const status = event.output.status.toLowerCase();
-          if (status === 'approved' || status === 'rejected') {
-            completeAllSteps();
-            const reviewer = (nodeName === 'auto_approve') ? 'system' : 'human';
-            addToHistory(currentExpense, status, reviewer);
-            showToast(
-              `Expense ${status}!`,
-              status === 'approved' ? 'success' : 'error'
-            );
-            resetForm();
-            flowCompleted = true;
-          }
-        }
+      // 2. Show text in chat panel
+      const text = extractDisplayText(event);
+      if (text) {
+        const label = nodeName && nodeName !== 'expense_approval_workflow' ? `[${prettifyNode(nodeName)}] ` : '';
+        addChatBubble(label + text, 'agent');
+      }
 
-        // Also detect completion from nodeInfo.outputFor containing the root workflow
-        if (event.nodeInfo && event.nodeInfo.outputFor) {
-          for (const outFor of event.nodeInfo.outputFor) {
-            if (outFor.startsWith('expense_approval_workflow@') && nodeName !== 'expense_approval_workflow') {
-              // This is the final output node - check for status in output
-              if (event.output && event.output.status && !flowCompleted) {
-                const status = event.output.status.toLowerCase();
-                completeAllSteps();
-                const reviewer = (nodeName === 'auto_approve') ? 'system' : 'human';
-                addToHistory(currentExpense, status, reviewer);
-                showToast(
-                  `Expense ${status}!`,
-                  status === 'approved' ? 'success' : 'error'
-                );
-                resetForm();
-                flowCompleted = true;
-              }
-            }
-          }
+      // 3. Detect HUMAN APPROVAL request (adk_request_input functionCall)
+      if (hasFunctionCall(event, 'adk_request_input')) {
+        needsHumanApproval = true;
+      }
+
+      // 4. Detect COMPLETED flow via output.status
+      if (!flowCompleted && event.output && typeof event.output === 'object' && event.output.status) {
+        const status = event.output.status.toLowerCase();
+        if (status === 'approved' || status === 'rejected') {
+          flowCompleted = true;
+          completeAllSteps();
+          const reviewer = (nodeName === 'auto_approve') ? 'system' : 'human';
+          addToHistory(currentExpense, status, reviewer);
+          showToast(
+            status === 'approved' ? '✅ Expense approved!' : '❌ Expense rejected!',
+            status === 'approved' ? 'success' : 'error'
+          );
+          resetForm();
         }
-      } catch (parseErr) {
-        // skip unparseable lines
       }
     }
   }
 
-  // After stream ends: if human approval was detected and flow didn't complete
-  if (needsHumanApproval && currentExpense && !flowCompleted) {
+  // After the entire stream ends — handle human approval if flow didn't complete
+  if (needsHumanApproval && !flowCompleted && currentExpense) {
     pendingReviews[sessionId] = {
       ...currentExpense,
       sessionId: sessionId,
     };
     savePending();
     updateStats();
-    showToast('⚠️ Expense requires human approval!', 'info');
+    showToast('⏳ Expense requires human approval!', 'info');
     switchView('review');
     resetForm();
   }
 }
 
-// ========== Extract Text ==========
-function extractText(event) {
-  if (event.content && event.content.parts) {
-    return event.content.parts
-      .filter(p => p.text && !p.thoughtSignature)
-      .map(p => p.text)
-      .join('\n');
+// ========== Helpers for SSE parsing ==========
+
+function extractDisplayText(event) {
+  // Get human-readable text from the event, skipping thoughtSignatures and functionCalls
+  if (!event.content || !event.content.parts) return '';
+  const texts = [];
+  for (const part of event.content.parts) {
+    if (part.functionCall) continue;    // skip function calls
+    if (part.thoughtSignature) continue; // skip thought signatures
+    if (part.text && part.text.trim()) {
+      texts.push(part.text.trim());
+    }
   }
-  return '';
+  return texts.join('\n');
+}
+
+function hasFunctionCall(event, fnName) {
+  if (!event.content || !event.content.parts) return false;
+  return event.content.parts.some(p => p.functionCall && p.functionCall.name === fnName);
+}
+
+function prettifyNode(name) {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 // ========== Review Queue ==========
@@ -332,14 +324,15 @@ function renderReviewQueue() {
   if (keys.length === 0) {
     grid.innerHTML = '';
     grid.appendChild(createEmptyState('inbox', 'No expenses pending review'));
+    lucide.createIcons();
     return;
   }
 
   grid.innerHTML = '';
-  keys.forEach(sessionId => {
-    const exp = pendingReviews[sessionId];
+  keys.forEach(sid => {
+    const exp = pendingReviews[sid];
     const card = document.createElement('div');
-    card.className = 'glass-card';
+    card.className = 'glass-card review-card';
     card.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <span class="badge pending">Pending Review</span>
@@ -350,10 +343,10 @@ function renderReviewQueue() {
       <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:4px"><strong>Category:</strong> ${exp.category}</p>
       <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:16px"><strong>Description:</strong> ${exp.description}</p>
       <div class="review-actions">
-        <button class="btn btn-success" onclick="handleReviewAction('${sessionId}', 'approve')">
+        <button class="btn btn-success" onclick="handleReviewAction('${sid}', 'approve')">
           <i data-lucide="check" style="width:16px;height:16px"></i> Approve
         </button>
-        <button class="btn btn-danger" onclick="handleReviewAction('${sessionId}', 'reject')">
+        <button class="btn btn-danger" onclick="handleReviewAction('${sid}', 'reject')">
           <i data-lucide="x" style="width:16px;height:16px"></i> Reject
         </button>
       </div>
@@ -368,13 +361,13 @@ async function handleReviewAction(sessionId, action) {
   if (!exp) return;
 
   currentSessionId = sessionId;
-  currentExpense = exp;
+  currentExpense = { ...exp };
 
   // Open chat and show the action
   document.getElementById('chat-panel').classList.add('open');
-  addChatBubble(action, 'user');
+  addChatBubble(`Decision: ${action}`, 'user');
 
-  // Remove from pending immediately for UI responsiveness
+  // Remove from pending
   delete pendingReviews[sessionId];
   savePending();
   renderReviewQueue();
@@ -382,10 +375,17 @@ async function handleReviewAction(sessionId, action) {
 
   showToast(`Sending ${action} decision...`, 'info');
 
-  // Show workflow again for the approval step
+  // Show workflow with approval step active
   const wfContainer = document.getElementById('workflow-container');
   wfContainer.style.display = 'block';
-  setWorkflowStep('approval');
+  // Mark all prior steps as completed, approval as active
+  WORKFLOW_STEPS.forEach((s, i) => {
+    const el = document.getElementById('step-' + s);
+    if (!el) return;
+    el.classList.remove('active', 'completed');
+    if (i < WORKFLOW_STEPS.length - 1) el.classList.add('completed');
+    else el.classList.add('active');
+  });
 
   // Send the decision to the agent
   await sendToAgent(action, sessionId);
@@ -421,7 +421,11 @@ function renderHistory() {
 function addToHistory(expense, status, reviewer) {
   if (!expense) return;
   expenseHistory.push({
-    ...expense,
+    amount: expense.amount,
+    submitter: expense.submitter,
+    category: expense.category,
+    description: expense.description,
+    date: expense.date,
     status: status,
     reviewer: reviewer,
   });
@@ -440,7 +444,6 @@ function resetForm() {
   btn.disabled = false;
   btn.innerHTML = '<i data-lucide="send" style="width:18px;height:18px"></i> Submit for Processing';
   lucide.createIcons();
-  // Set default date to today
   document.getElementById('date').valueAsDate = new Date();
 }
 
@@ -455,6 +458,5 @@ function createEmptyState(icon, text) {
 document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   updateStats();
-  // Set default date to today
   document.getElementById('date').valueAsDate = new Date();
 });

@@ -224,19 +224,18 @@ body {
 /* Workflow Visualizer */
 .workflow-pipeline {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-top: 40px;
   position: relative;
-  padding: 20px 0;
+  padding: 24px 0 12px;
 }
 
 .workflow-pipeline::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 32px;
-  right: 32px;
+  top: 44px;
+  left: 40px;
+  right: 40px;
   height: 2px;
   background: var(--border-subtle);
   z-index: 0;
@@ -246,45 +245,55 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   z-index: 1;
   position: relative;
-  width: 80px;
+  flex: 1;
 }
 
 .step-circle {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   background: var(--bg-dark);
   border: 2px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  color: var(--text-secondary);
+  transition: all 0.4s ease;
 }
 
 .step-label {
   font-size: 0.75rem;
   color: var(--text-secondary);
   text-align: center;
+  font-weight: 500;
 }
 
 .workflow-step.active .step-circle {
   border-color: #667eea;
-  box-shadow: 0 0 15px rgba(102, 126, 234, 0.4);
+  color: #667eea;
+  box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
   animation: pulse-glow 2s infinite;
+}
+.workflow-step.active .step-label {
+  color: #667eea;
+  font-weight: 600;
 }
 
 .workflow-step.completed .step-circle {
   border-color: var(--success);
-  background: var(--success-bg);
+  background: var(--success);
+  color: white;
+}
+.workflow-step.completed .step-label {
+  color: var(--success);
 }
 
 @keyframes pulse-glow {
-  0% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4); }
-  70% { box-shadow: 0 0 0 10px rgba(102, 126, 234, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4); }
+  50% { box-shadow: 0 0 0 12px rgba(102, 126, 234, 0); }
 }
 
 /* Chat Panel */
@@ -442,6 +451,8 @@ th {
   box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 .toast.info { border-left-color: #3b82f6; }
+.toast.success { border-left-color: var(--success); }
+.toast.error { border-left-color: var(--danger); }
 @keyframes slide-in {
   from { transform: translateX(100%); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
