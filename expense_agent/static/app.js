@@ -21,11 +21,31 @@ function switchView(viewName) {
 
 // ========== Chat Panel ==========
 document.getElementById('chat-toggle-btn').addEventListener('click', () => {
-  document.getElementById('chat-panel').classList.toggle('open');
+  const panel = document.getElementById('chat-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) {
+    document.body.classList.add('chat-open');
+  } else {
+    document.body.classList.remove('chat-open');
+  }
 });
 document.getElementById('chat-close-btn').addEventListener('click', () => {
   document.getElementById('chat-panel').classList.remove('open');
+  document.body.classList.remove('chat-open');
 });
+
+function setChatInputState(enabled) {
+  const input = document.getElementById('chat-input');
+  const btn = document.getElementById('chat-send-btn');
+  input.disabled = !enabled;
+  btn.disabled = !enabled;
+  if (enabled) {
+    input.placeholder = "Type approve or reject...";
+    input.focus();
+  } else {
+    input.placeholder = "Agent is processing... (Read-only)";
+  }
+}
 
 document.getElementById('chat-send-btn').addEventListener('click', sendChatMessage);
 document.getElementById('chat-input').addEventListener('keydown', e => {
@@ -163,7 +183,14 @@ document.getElementById('expense-form').addEventListener('submit', async (e) => 
   resetWorkflow();
 
   // Open chat panel
-  document.getElementById('chat-panel').classList.add('open');
+  const chatPanel = document.getElementById('chat-panel');
+  if (!chatPanel.classList.contains('open')) {
+    chatPanel.classList.add('open');
+    document.body.classList.add('chat-open');
+  }
+  
+  // Ensure chat input is disabled initially
+  setChatInputState(false);
   addChatBubble(`Submitting: $${expense.amount} — ${expense.category} — ${expense.description}`, 'user');
 
   try {
@@ -287,7 +314,15 @@ async function sendToAgent(messageText, sessionId) {
     updateStats();
     showToast('⏳ Expense requires human approval!', 'info');
     switchView('review');
-    resetForm();
+    
+    // Enable chat input so the user can communicate their decision
+    setChatInputState(true);
+    
+    // Re-enable submit form button
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = false;
+    btn.innerHTML = '<i data-lucide="send" style="width:18px;height:18px"></i> Submit for Processing';
+    lucide.createIcons();
   }
 }
 
@@ -364,7 +399,15 @@ async function handleReviewAction(sessionId, action) {
   currentExpense = { ...exp };
 
   // Open chat and show the action
-  document.getElementById('chat-panel').classList.add('open');
+  const chatPanel = document.getElementById('chat-panel');
+  if (!chatPanel.classList.contains('open')) {
+    chatPanel.classList.add('open');
+    document.body.classList.add('chat-open');
+  }
+  
+  // Disable input while processing the decision
+  setChatInputState(false);
+  
   addChatBubble(`Decision: ${action}`, 'user');
 
   // Remove from pending
@@ -445,6 +488,7 @@ function resetForm() {
   btn.innerHTML = '<i data-lucide="send" style="width:18px;height:18px"></i> Submit for Processing';
   lucide.createIcons();
   document.getElementById('date').valueAsDate = new Date();
+  setChatInputState(false);
 }
 
 function createEmptyState(icon, text) {
